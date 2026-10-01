@@ -4,12 +4,14 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 7000;
 
+// Enable CORS for Stremio client access
 app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Headers', '*');
     next();
 });
 
+// Helper function to extract title IDs from IMDb list page
 async function getImdbListItems(listId) {
     try {
         const url = `https://www.imdb.com/list/${listId}/`;
@@ -24,7 +26,7 @@ async function getImdbListItems(listId) {
         const html = response.data;
         const metas = [];
 
-        // Method 1: Extract from IMDb Next.js Embedded JSON (__NEXT_DATA__)
+        // Method 1: Extract from IMDb Next.js Embedded Data (__NEXT_DATA__)
         const jsonMatch = html.match(/<script id="__NEXT_DATA__" type="application\/json">(.*?)<\/script>/s);
         if (jsonMatch && jsonMatch[1]) {
             try {
@@ -38,22 +40,21 @@ async function getImdbListItems(listId) {
                     if (titleId) {
                         metas.push({
                             id: titleId,
-                            type: (itemType && itemType.includes('tv')) ? 'series' : 'movie',
+                            type: (itemType && itemType.toLowerCase().includes('tv')) ? 'series' : 'movie',
                             name: titleId
                         });
                     }
                 });
             } catch (e) {
-                console.log('Failed parsing __NEXT_DATA__, falling back to regex extraction');
+                console.log('Failed parsing __NEXT_DATA__, using regex fallback');
             }
         }
 
-        // Method 2: Fallback Regex for tt IDs if JSON parsing didn't catch them
+        // Method 2: Fallback Regex Extraction for tt IDs
         if (metas.length === 0) {
             const matches = html.match(/tt\d{7,8}/g) || [];
             const uniqueIds = [...new Set(matches)];
             uniqueIds.forEach(id => {
-                // Return as both series and movie formats so Stremio captures both
                 metas.push({ id: id, type: 'series', name: id });
                 metas.push({ id: id, type: 'movie', name: id });
             });
@@ -61,14 +62,17 @@ async function getImdbListItems(listId) {
 
         return metas;
     } catch (error) {
-        console.error(`Error scraping IMDb list ${listId}:`, error.message);
+        console.error(`Error fetching IMDb list ${listId}:`, error.message);
         return [];
     }
 }
 
-app.get('/', (req, res) => res.send('IMDb Addon Server Active'));
+// Landing page route
+app.get('/', (req, res) => {
+    res.send('IMDb Stremio Addon Server is Active');
+});
 
-// Stremio Manifest - Supporting both Movies & Series
+// Stremio Manifest Route
 app.get('/:lsCode/manifest.json', (req, res) => {
     const lsCode = req.params.lsCode;
     res.json({
@@ -85,15 +89,17 @@ app.get('/:lsCode/manifest.json', (req, res) => {
     });
 });
 
-// Stremio Catalog Endpoint
-app.get('/:lsCode/catalog/:type/:catalogId', async (req, res) => {
+// Stremio Catalog Route (Express wildcard pattern to handle optional .json suffix)
+app.get('/:lsCode/catalog/:type/:catalogId*', async (req, res) => {
     const lsCode = req.params.lsCode;
     const reqType = req.params.type; // 'series' or 'movie'
     const allMetas = await getImdbListItems(lsCode);
     
-    // Filter metas according to request type
+    // Filter metas according to request type (series vs movie)
     const metas = allMetas.filter(item => item.type === reqType);
     res.json({ metas });
 });
 
-app.listen(PORT, () => console.log(`Server active on port ${PORT}`));
+app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+});
