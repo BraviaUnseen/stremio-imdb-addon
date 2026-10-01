@@ -4,14 +4,14 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 7000;
 
-// Enable CORS for Stremio client access
+// Enable CORS for Stremio client requests
 app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Headers', '*');
     next();
 });
 
-// Helper function to extract title IDs from IMDb list page
+// Helper function to extract title IDs from any IMDb list
 async function getImdbListItems(listId) {
     try {
         const url = `https://www.imdb.com/list/${listId}/`;
@@ -25,51 +25,52 @@ async function getImdbListItems(listId) {
 
         const html = response.data;
         const metas = [];
+        const seenIds = new Set();
 
-        // Method 1: Extract from IMDb Next.js Embedded Data (__NEXT_DATA__)
+        // Method 1: Extract from IMDb Next.js Embedded State (__NEXT_DATA__)
         const jsonMatch = html.match(/<script id="__NEXT_DATA__" type="application\/json">(.*?)<\/script>/s);
         if (jsonMatch && jsonMatch[1]) {
             try {
                 const parsedData = JSON.parse(jsonMatch[1]);
-                const listItems = parsedData?.props?.pageProps?.contentData?.entityList?.items || 
-                                  parsedData?.props?.pageProps?.mainColumnData?.list?.titleListItemSearch?.edges || [];
+                
+                // Parse items from IMDb's list payload
+                const listItems = 
+                    parsedData?.props?.pageProps?.contentData?.entityList?.items || 
+                    parsedData?.props?.pageProps?.mainColumnData?.list?.titleListItemSearch?.edges || [];
                 
                 listItems.forEach(item => {
                     const titleId = item?.titleId || item?.node?.title?.id;
-                    const itemType = item?.titleType?.type || item?.node?.title?.titleType?.id;
-                    if (titleId) {
-                        metas.push({
-                            id: titleId,
-                            type: (itemType && itemType.toLowerCase().includes('tv')) ? 'series' : 'movie',
-                            name: titleId
-                        });
+                    if (titleId && !seenIds.has(titleId)) {
+                        seenIds.add(titleId);
+                        metas.push({ id: titleId, name: titleId });
                     }
                 });
             } catch (e) {
-                console.log('Failed parsing __NEXT_DATA__, using regex fallback');
+                console.log('JSON state parse failed, using fallback regex');
             }
         }
 
-        // Method 2: Fallback Regex Extraction for tt IDs
+        // Method 2: Fallback Regex Scraper for all tt IDs on the page
         if (metas.length === 0) {
             const matches = html.match(/tt\d{7,8}/g) || [];
-            const uniqueIds = [...new Set(matches)];
-            uniqueIds.forEach(id => {
-                metas.push({ id: id, type: 'series', name: id });
-                metas.push({ id: id, type: 'movie', name: id });
+            matches.forEach(id => {
+                if (!seenIds.has(id)) {
+                    seenIds.add(id);
+                    metas.push({ id: id, name: id });
+                }
             });
         }
 
         return metas;
     } catch (error) {
-        console.error(`Error fetching IMDb list ${listId}:`, error.message);
+        console.error(`Error scraping IMDb list ${listId}:`, error.message);
         return [];
     }
 }
 
 // Landing page route
 app.get('/', (req, res) => {
-    res.send('IMDb Stremio Addon Server is Active');
+    res.send('IMDb Stremio Addon Server Active');
 });
 
 // Stremio Manifest Route
@@ -89,14 +90,20 @@ app.get('/:lsCode/manifest.json', (req, res) => {
     });
 });
 
-// Stremio Catalog Route (Express wildcard pattern to handle optional .json suffix)
+// Stremio Catalog Route (Express wildcard matching handles optional .json extension)
 app.get('/:lsCode/catalog/:type/:catalogId*', async (req, res) => {
     const lsCode = req.params.lsCode;
     const reqType = req.params.type; // 'series' or 'movie'
-    const allMetas = await getImdbListItems(lsCode);
     
-    // Filter metas according to request type (series vs movie)
-    const metas = allMetas.filter(item => item.type === reqType);
+    const rawItems = await getImdbListItems(lsCode);
+    
+    // Attach current requested type to ensure Stremio renders metadata posters correctly
+    const metas = rawItems.map(item => ({
+        id: item.id,
+        type: reqType,
+        name: item.id
+    }));
+
     res.json({ metas });
 });
 
