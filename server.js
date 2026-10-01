@@ -248,22 +248,22 @@ const manifest = {
         {
             type: "movie",
             id: "top_rated_movies", 
-            name: "Top Rated IMDb - Movies"
+            name: "Top Rated IMDb"
         },
         {
             type: "series",
             id: "top_rated_series", 
-            name: "Top Rated IMDb Series"
+            name: "Top Rated IMDb"
         },
         {
             type: "movie",
             id: "netflix_originals", 
-            name: "Netflix Originals - Movies"
+            name: "Netflix Originals"
         },
         {
             type: "series",
             id: "netflix_originals_series", 
-            name: "Netflix Originals - Series" 
+            name: "Netflix Originals" 
         }
     ],
     resources: ["catalog"],
