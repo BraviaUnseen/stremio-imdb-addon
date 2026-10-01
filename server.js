@@ -10,64 +10,83 @@ app.use((req, res, next) => {
     next();
 });
 
-// Fetch items using IMDb GraphQL API directly
+// Helper function to extract IMDb IDs using direct CSV export & HTML regex fallbacks
 async function getImdbListItems(listId) {
+    let ids = [];
+
+    // Method 1: IMDb List CSV Export (Most Reliable)
     try {
-        const query = `
-        query GetListItems($listId: ID!) {
-            list(id: $listId) {
-                titleListItemSearch(first: 250) {
-                    edges {
-                        node {
-                            title {
-                                id
+        const csvUrl = `https://www.imdb.com/list/${listId}/export`;
+        const response = await axios.get(csvUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                'Accept': 'text/csv,text/plain,*/*'
+            },
+            timeout: 8000
+        });
+
+        if (response.data && typeof response.data === 'string') {
+            const matches = response.data.match(/tt\d{7,8}/g) || [];
+            ids = [...new Set(matches)];
+        }
+    } catch (e) {
+        console.log(`CSV Export failed for ${listId}, trying GraphQL...`);
+    }
+
+    // Method 2: GraphQL API Fallback
+    if (ids.length === 0) {
+        try {
+            const query = `
+            query GetListItems($listId: ID!) {
+                list(id: $listId) {
+                    titleListItemSearch(first: 250) {
+                        edges {
+                            node {
+                                title { id }
                             }
                         }
                     }
                 }
-            }
-        }`;
+            }`;
 
-        const response = await axios.post(
-            'https://graphql.imdb.com/',
-            {
-                query: query,
-                variables: { listId: listId }
-            },
-            {
-                headers: {
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                    'Accept-Language': 'en-US,en;q=0.9'
+            const response = await axios.post(
+                'https://graphql.imdb.com/',
+                { query, variables: { listId } },
+                {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+                    },
+                    timeout: 8000
                 }
-            }
-        );
+            );
 
-        const edges = response.data?.data?.list?.titleListItemSearch?.edges || [];
-        const metas = edges.map(edge => ({
-            id: edge.node.title.id,
-            name: edge.node.title.id
-        }));
-
-        return metas;
-    } catch (error) {
-        console.error(`GraphQL fetch failed for list ${listId}:`, error.message);
-        
-        // Fallback HTML regex scraper if GraphQL endpoint throttles
-        try {
-            const fallbackUrl = `https://www.imdb.com/list/${listId}/`;
-            const htmlRes = await axios.get(fallbackUrl, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-                }
-            });
-            const matches = htmlRes.data.match(/tt\d{7,8}/g) || [];
-            const uniqueIds = [...new Set(matches)];
-            return uniqueIds.map(id => ({ id, name: id }));
+            const edges = response.data?.data?.list?.titleListItemSearch?.edges || [];
+            ids = edges.map(edge => edge.node.title.id);
         } catch (e) {
-            return [];
+            console.log(`GraphQL failed for ${listId}, trying HTML regex fallback...`);
         }
     }
+
+    // Method 3: Direct Web Scraping Fallback
+    if (ids.length === 0) {
+        try {
+            const url = `https://www.imdb.com/list/${listId}/`;
+            const response = await axios.get(url, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                    'Accept-Language': 'en-US,en;q=0.9'
+                },
+                timeout: 8000
+            });
+            const matches = response.data.match(/tt\d{7,8}/g) || [];
+            ids = [...new Set(matches)];
+        } catch (e) {
+            console.error(`All fetch methods failed for list ${listId}:`, e.message);
+        }
+    }
+
+    return ids.map(id => ({ id, name: id }));
 }
 
 app.get('/', (req, res) => res.send('IMDb Stremio Addon Active'));
