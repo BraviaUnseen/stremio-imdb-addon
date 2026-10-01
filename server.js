@@ -28,16 +28,20 @@ async function getCinemetaMeta(id, type) {
     return null;
 }
 
-// Fetch list items via a proxy to bypass Render's datacenter IP block
+// Fetch list items via CorsProxy
 async function getImdbListItems(listId) {
     try {
-        // Uses AllOrigins proxy to strip Cloudflare/IP checks from IMDb
-        const targetUrl = encodeURIComponent(`https://www.imdb.com/list/${listId}/`);
-        const proxyUrl = `https://api.allorigins.win/get?url=${targetUrl}`;
+        const targetUrl = `https://www.imdb.com/list/${listId}/`;
+        const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
 
-        const response = await axios.get(proxyUrl, { timeout: 10000 });
-        const html = response.data?.contents || '';
+        const response = await axios.get(proxyUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            },
+            timeout: 10000
+        });
 
+        const html = response.data || '';
         const matches = html.match(/tt\d{7,8}/g) || [];
         const uniqueIds = [...new Set(matches)];
 
