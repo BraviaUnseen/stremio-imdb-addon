@@ -10,7 +10,6 @@ app.use((req, res, next) => {
     next();
 });
 
-// Cache map for Cinemeta responses
 const metaCache = new Map();
 
 async function getCinemetaMeta(id, type) {
@@ -24,63 +23,28 @@ async function getCinemetaMeta(id, type) {
             return res.data.meta;
         }
     } catch (e) {
-        // Fallback handled below
+        // Fallback
     }
     return null;
 }
 
-// Fetch list items via IMDb Web GraphQL API
+// Fetch list items via a proxy to bypass Render's datacenter IP block
 async function getImdbListItems(listId) {
     try {
-        const query = `
-        query GetList($listId: ID!) {
-            list(id: $listId) {
-                titleListItemSearch(first: 250) {
-                    edges {
-                        node {
-                            title {
-                                id
-                                titleText { text }
-                                titleType { id isSeries isEpisode }
-                            }
-                        }
-                    }
-                }
-            }
-        }`;
+        // Uses AllOrigins proxy to strip Cloudflare/IP checks from IMDb
+        const targetUrl = encodeURIComponent(`https://www.imdb.com/list/${listId}/`);
+        const proxyUrl = `https://api.allorigins.win/get?url=${targetUrl}`;
 
-        const response = await axios.post('https://graphql.imdb.com/', 
-            { query, variables: { listId } },
-            {
-                headers: {
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                    'x-imdb-app-name': 'imdb-web'
-                },
-                timeout: 8000
-            }
-        );
+        const response = await axios.get(proxyUrl, { timeout: 10000 });
+        const html = response.data?.contents || '';
 
-        const edges = response.data?.data?.list?.titleListItemSearch?.edges || [];
-        return edges.map(edge => ({
-            id: edge.node.title.id,
-            name: edge.node.title.titleText?.text || edge.node.title.id,
-            isSeries: edge.node.title.titleType?.isSeries || false
-        }));
+        const matches = html.match(/tt\d{7,8}/g) || [];
+        const uniqueIds = [...new Set(matches)];
+
+        return uniqueIds.map(id => ({ id, name: id }));
     } catch (error) {
-        console.error(`GraphQL fetch failed for list ${listId}:`, error.message);
-        
-        // Fallback regex match if GraphQL fails
-        try {
-            const htmlRes = await axios.get(`https://www.imdb.com/list/${listId}/`, {
-                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-            });
-            const matches = htmlRes.data.match(/tt\d{7,8}/g) || [];
-            const uniqueIds = [...new Set(matches)];
-            return uniqueIds.map(id => ({ id, name: id, isSeries: false }));
-        } catch (e) {
-            return [];
-        }
+        console.error(`Proxy fetch failed for ${listId}:`, error.message);
+        return [];
     }
 }
 
@@ -106,7 +70,7 @@ app.get('/:lsCode/manifest.json', (req, res) => {
 // Catalog Route
 app.get('/:lsCode/catalog/:type/:catalogId*', async (req, res) => {
     const lsCode = req.params.lsCode;
-    const reqType = req.params.type; // 'series' or 'movie'
+    const reqType = req.params.type;
     
     const items = await getImdbListItems(lsCode);
     
