@@ -1,18 +1,16 @@
 const express = require('express');
 const axios = require('axios');
-const cheerio = require('cheerio');
 
 const app = express();
 const PORT = process.env.PORT || 7000;
 
-// Enable CORS for Stremio client access
 app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Headers', '*');
     next();
 });
 
-// Helper function to scrape IMDb list items
+// Resilient regex scraper for IMDb list items
 async function getImdbListItems(listId) {
     try {
         const url = `https://www.imdb.com/list/${listId}/`;
@@ -22,29 +20,25 @@ async function getImdbListItems(listId) {
                 'Accept-Language': 'en-US,en;q=0.9'
             }
         });
-        const $ = cheerio.load(response.data);
-        const metas = [];
 
-        // Parse title IDs from the page
-        $('[data-tconst]').each((i, element) => {
-            const imdbId = $(element).attr('data-tconst');
-            if (imdbId && !metas.some(item => item.id === imdbId)) {
-                metas.push({
-                    id: imdbId,
-                    type: 'movie',
-                    name: $(element).find('.ipc-title__text').text().replace(/^\d+\.\s*/, '') || 'Movie'
-                });
-            }
-        });
+        // Extract all IMDb tt IDs (tt1234567) using regex from page source
+        const html = response.data;
+        const ttMatches = html.match(/tt\d{7,8}/g) || [];
+        
+        // Remove duplicate IDs
+        const uniqueIds = [...new Set(ttMatches)];
 
-        return metas;
+        return uniqueIds.map(id => ({
+            id: id,
+            type: 'movie',
+            name: id // Stremio automatically resolves title metadata using the IMDb ID
+        }));
     } catch (error) {
         console.error(`Error scraping IMDb list ${listId}:`, error.message);
         return [];
     }
 }
 
-// Landing page route
 app.get('/', (req, res) => {
     res.send('IMDb Stremio Addon is active.');
 });
@@ -70,8 +64,8 @@ app.get('/:lsCode/manifest.json', (req, res) => {
     res.json(manifest);
 });
 
-// Stremio Catalog Route
-app.get('/:lsCode/catalog/movie/:catalogId.json', async (req, res) => {
+// Stremio Catalog Route - matches Stremio request pattern
+app.get('/:lsCode/catalog/movie/:catalogId', async (req, res) => {
     const lsCode = req.params.lsCode;
     const metas = await getImdbListItems(lsCode);
     res.json({ metas });
