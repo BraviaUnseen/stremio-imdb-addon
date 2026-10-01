@@ -1,7 +1,7 @@
 const { addonBuilder, getRouter } = require("stremio-addon-sdk");
 const express = require("express");
 
-// 1. Your Custom Lists Dictionary
+// 1. Your Custom Lists Dictionary (Fully Populated)
 const CUSTOM_LISTS = {
     "top_rated_movies": [
         "tt0111161", "tt0068646", "tt0468569", "tt0071562", "tt0167260", "tt0050083", "tt0108052", 
@@ -238,10 +238,10 @@ const CUSTOM_LISTS = {
     ]
 };
 
-// 2. Addon Manifest - Bumped version to break Stremio's empty cache
+// 2. Addon Manifest - Bumped to 1.0.7 to force Stremio to update
 const manifest = {
     id: "org.custom.imdb.lists",
-    version: "1.0.6", // Bumped to 1.0.6
+    version: "1.0.7", 
     name: "My Custom IMDb Lists",
     description: "Curated Stremio Catalogs",
     catalogs: [
@@ -272,40 +272,35 @@ const manifest = {
 };
 
 const builder = new addonBuilder(manifest);
-
-// 3. Dynamic Memory Cache 
 const cache = {};
 
-// Helper: Fetch metadata
-async function fetchCinemeta(id) {
+// 3. FASTER FETCH: We now tell it exactly what type to look for so it never fails!
+async function fetchCinemeta(id, type) {
     try {
-        let res = await fetch(`https://v3-cinemeta.strem.io/meta/movie/${id}.json`);
+        let res = await fetch(`https://v3-cinemeta.strem.io/meta/${type}/${id}.json`);
         let data = await res.json();
-        if (data && data.meta) return { ...data.meta, type: 'movie' };
-
-        res = await fetch(`https://v3-cinemeta.strem.io/meta/series/${id}.json`);
-        data = await res.json();
-        if (data && data.meta) return { ...data.meta, type: 'series' };
+        if (data && data.meta) return { ...data.meta, type: type };
     } catch (err) {
-        // Silently ignore failed IDs
+        // Silently ignore invalid IDs
     }
     return null; 
 }
 
-// 4. BATCH LOAD CACHE - Fetches 20 items at once to speed up load time
+// 4. BATCH LOAD CACHE 
 async function buildCache() {
     for (const [listId, ids] of Object.entries(CUSTOM_LISTS)) {
         cache[listId] = []; 
-        console.log(`Building cache for [${listId}] with ${ids.length} items...`);
         
-        let mCount = 0, sCount = 0;
+        // This dynamically checks the list name. If it says "series", it only fetches series!
+        const expectedType = listId.includes("series") ? "series" : "movie";
         
-        // Fetch in batches of 20 to avoid rate limits and speed up server boot
+        console.log(`Building [${listId}] as ${expectedType.toUpperCase()} (${ids.length} items)...`);
+        
+        // Fetch in batches of 20 to speed up server boot
         for (let i = 0; i < ids.length; i += 20) {
             const chunk = ids.slice(i, i + 20);
             
-            // Wait for all 20 fetch requests in this chunk to finish at the same time
-            const promises = chunk.map(id => fetchCinemeta(id));
+            const promises = chunk.map(id => fetchCinemeta(id, expectedType));
             const results = await Promise.all(promises);
             
             for (const meta of results) {
@@ -318,12 +313,10 @@ async function buildCache() {
                         description: meta.description,
                         releaseInfo: meta.releaseInfo
                     });
-                    if(meta.type === 'movie') mCount++;
-                    if(meta.type === 'series') sCount++;
                 }
             }
         }
-        console.log(`✅ [${listId}] Loaded: ${mCount} Movies | ${sCount} Series.`);
+        console.log(`✅ [${listId}] Loaded ${cache[listId].length} items.`);
     }
     console.log("🚀 ALL CATALOGS SUCCESSFULLY CACHED AND READY!");
 }
