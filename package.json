@@ -1,6 +1,6 @@
 {
   "name": "stremio-imdb-custom-list",
-  "version": "1.0.05",
+  "version": "1.0.0",
   "description": "Stremio addon for an IMDb List",
   "main": "server.js",
   "scripts": {
