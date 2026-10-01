@@ -238,10 +238,10 @@ const CUSTOM_LISTS = {
     ]
 };
 
-// 2. Addon Manifest - Strictly ordered as requested
+// 2. Addon Manifest - Bumped version to break Stremio's empty cache
 const manifest = {
     id: "org.custom.imdb.lists",
-    version: "1.0.5", // Bumped version to ensure Stremio updates properly
+    version: "1.0.6", // Bumped to 1.0.6
     name: "My Custom IMDb Lists",
     description: "Curated Stremio Catalogs",
     catalogs: [
@@ -276,56 +276,62 @@ const builder = new addonBuilder(manifest);
 // 3. Dynamic Memory Cache 
 const cache = {};
 
-// Helper: Fetch metadata and intelligently check both movies and series
+// Helper: Fetch metadata
 async function fetchCinemeta(id) {
     try {
-        // Try Movie first
         let res = await fetch(`https://v3-cinemeta.strem.io/meta/movie/${id}.json`);
         let data = await res.json();
         if (data && data.meta) return { ...data.meta, type: 'movie' };
 
-        // If it fails (not a movie), try Series
         res = await fetch(`https://v3-cinemeta.strem.io/meta/series/${id}.json`);
         data = await res.json();
         if (data && data.meta) return { ...data.meta, type: 'series' };
     } catch (err) {
-        console.error(`[Cinemeta Error] Failed to fetch ${id}`);
+        // Silently ignore failed IDs
     }
     return null; 
 }
 
-// 4. Build Cache for ALL lists 
+// 4. BATCH LOAD CACHE - Fetches 20 items at once to speed up load time
 async function buildCache() {
     for (const [listId, ids] of Object.entries(CUSTOM_LISTS)) {
         cache[listId] = []; 
         console.log(`Building cache for [${listId}] with ${ids.length} items...`);
         
         let mCount = 0, sCount = 0;
-        for (const id of ids) {
-            const meta = await fetchCinemeta(id);
-            if (meta) {
-                cache[listId].push({
-                    id: meta.id,
-                    type: meta.type,
-                    name: meta.name,
-                    poster: meta.poster,
-                    description: meta.description,
-                    releaseInfo: meta.releaseInfo
-                });
-                if(meta.type === 'movie') mCount++;
-                if(meta.type === 'series') sCount++;
+        
+        // Fetch in batches of 20 to avoid rate limits and speed up server boot
+        for (let i = 0; i < ids.length; i += 20) {
+            const chunk = ids.slice(i, i + 20);
+            
+            // Wait for all 20 fetch requests in this chunk to finish at the same time
+            const promises = chunk.map(id => fetchCinemeta(id));
+            const results = await Promise.all(promises);
+            
+            for (const meta of results) {
+                if (meta) {
+                    cache[listId].push({
+                        id: meta.id,
+                        type: meta.type,
+                        name: meta.name,
+                        poster: meta.poster,
+                        description: meta.description,
+                        releaseInfo: meta.releaseInfo
+                    });
+                    if(meta.type === 'movie') mCount++;
+                    if(meta.type === 'series') sCount++;
+                }
             }
         }
         console.log(`✅ [${listId}] Loaded: ${mCount} Movies | ${sCount} Series.`);
     }
+    console.log("🚀 ALL CATALOGS SUCCESSFULLY CACHED AND READY!");
 }
 
 // 5. Dynamic Catalog Handler 
 builder.defineCatalogHandler(({ type, id, extra }) => {
     if (cache[id]) {
-        // Automatically filters the array based on the active Stremio tab
         const filteredList = cache[id].filter(meta => meta.type === type);
-        
         const skip = extra.skip ? parseInt(extra.skip) : 0;
         const metas = filteredList.slice(skip, skip + 100); 
         return Promise.resolve({ metas });
