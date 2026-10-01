@@ -10,71 +10,82 @@ app.use((req, res, next) => {
     next();
 });
 
-// Cache map to store metadata temporarily
-const metadataCache = new Map();
+// Cache for Cinemeta responses
+const metaCache = new Map();
 
-// Helper to fetch item metadata from Cinemeta
-async function fetchCinemetaMeta(id, type) {
-    const cacheKey = `${id}_${type}`;
-    if (metadataCache.has(cacheKey)) {
-        return metadataCache.get(cacheKey);
-    }
+async function getCinemetaMeta(id, type) {
+    const key = `${id}_${type}`;
+    if (metaCache.has(key)) return metaCache.get(key);
 
     try {
-        const response = await axios.get(`https://v3-cinemeta.strem.io/meta/${type}/${id}.json`, { timeout: 3000 });
-        if (response.data && response.data.meta) {
-            const meta = response.data.meta;
-            metadataCache.set(cacheKey, meta);
-            return meta;
+        const res = await axios.get(`https://v3-cinemeta.strem.io/meta/${type}/${id}.json`, { timeout: 3000 });
+        if (res.data && res.data.meta) {
+            metaCache.set(key, res.data.meta);
+            return res.data.meta;
         }
     } catch (e) {
-        // Fallback if Cinemeta fails or item isn't of this specific type
+        // Cinemeta fetch error fallback
     }
     return null;
 }
 
-// Fetch list items from IMDb
+// Extraction engine that tries 3 methods to fetch list item IDs
 async function getImdbListItems(listId) {
-    // Method 1: IMDb JSON Suggestion Endpoint (Bypasses Cloudflare)
+    let titleIds = [];
+
+    // Method 1: IMDb internal JSON suggestion API
     try {
-        const url = `https://v3.sg.media-imdb.com/suggestion/${listId.substring(0, 1)}/${listId}.json`;
-        const response = await axios.get(url, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-            },
+        const url = `https://v3.sg.media-imdb.com/suggestion/${listId.charAt(0)}/${listId}.json`;
+        const res = await axios.get(url, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
             timeout: 5000
         });
-
-        if (response.data && response.data.d) {
-            return response.data.d.map(item => ({ id: item.id, title: item.l }));
+        if (res.data && res.data.d) {
+            titleIds = res.data.d.map(item => item.id).filter(id => id && id.startsWith('tt'));
         }
     } catch (e) {
-        console.log(`Suggestion API bypassed for ${listId}`);
+        console.log(`Suggestion API bypass failed for ${listId}`);
     }
 
-    // Method 2: Fallback Regex Parsing
-    try {
-        const htmlUrl = `https://www.imdb.com/list/${listId}/`;
-        const response = await axios.get(htmlUrl, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                'Accept-Language': 'en-US,en;q=0.9'
-            },
-            timeout: 5000
-        });
-
-        const matches = response.data.match(/tt\d{7,8}/g) || [];
-        const uniqueIds = [...new Set(matches)];
-        return uniqueIds.map(id => ({ id: id, title: id }));
-    } catch (error) {
-        console.error(`Failed to scrape list ${listId}:`, error.message);
-        return [];
+    // Method 2: CSV Export Endpoint
+    if (titleIds.length === 0) {
+        try {
+            const csvUrl = `https://www.imdb.com/list/${listId}/export`;
+            const res = await axios.get(csvUrl, {
+                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+                timeout: 5000
+            });
+            const matches = res.data.match(/tt\d{7,8}/g) || [];
+            titleIds = [...new Set(matches)];
+        } catch (e) {
+            console.log(`CSV export failed for ${listId}`);
+        }
     }
+
+    // Method 3: Direct HTML Regex Scraping
+    if (titleIds.length === 0) {
+        try {
+            const htmlUrl = `https://www.imdb.com/list/${listId}/`;
+            const res = await axios.get(htmlUrl, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept-Language': 'en-US,en;q=0.9'
+                },
+                timeout: 5000
+            });
+            const matches = res.data.match(/tt\d{7,8}/g) || [];
+            titleIds = [...new Set(matches)];
+        } catch (e) {
+            console.error(`HTML scraping failed for ${listId}:`, e.message);
+        }
+    }
+
+    return titleIds;
 }
 
-app.get('/', (req, res) => res.send('IMDb Addon Server Active'));
+app.get('/', (req, res) => res.send('IMDb Stremio Addon Server Active'));
 
-// Manifest Route
+// Manifest Endpoint
 app.get('/:lsCode/manifest.json', (req, res) => {
     const lsCode = req.params.lsCode;
     res.json({
@@ -91,29 +102,27 @@ app.get('/:lsCode/manifest.json', (req, res) => {
     });
 });
 
-// Catalog Endpoint with Cinemeta Enrichment
+// Catalog Endpoint
 app.get('/:lsCode/catalog/:type/:catalogId*', async (req, res) => {
     const lsCode = req.params.lsCode;
     const reqType = req.params.type; // 'series' or 'movie'
     
-    const rawItems = await getImdbListItems(lsCode);
+    const ids = await getImdbListItems(lsCode);
     
-    // Resolve full metadata for each item matching requested category
-    const metaPromises = rawItems.map(async (item) => {
-        const cinemeta = await fetchCinemetaMeta(item.id, reqType);
-        if (cinemeta) {
-            return cinemeta;
-        }
-        // Fallback placeholder object if item is unindexed in Cinemeta
-        return {
-            id: item.id,
-            type: reqType,
-            name: item.title || item.id,
-            poster: `https://images.metahub.space/poster/medium/${item.id}/img`
-        };
-    });
+    // Process items in parallel with fallback poster assets
+    const metas = await Promise.all(ids.map(async (id) => {
+        const enrichedMeta = await getCinemetaMeta(id, reqType);
+        if (enrichedMeta) return enrichedMeta;
 
-    const metas = await Promise.all(metaPromises);
+        // Fallback item so metas is never empty for valid IDs
+        return {
+            id: id,
+            type: reqType,
+            name: id,
+            poster: `https://images.metahub.space/poster/medium/${id}/img`
+        };
+    }));
+
     res.json({ metas });
 });
 
