@@ -1,14 +1,13 @@
 {
-  "name": "stremio-imdb-addon",
+  "name": "stremio-imdb-custom-list",
   "version": "1.0.0",
+  "description": "Stremio addon for an IMDb List",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "axios": "^1.6.0",
-    "cheerio": "^1.0.0-rc.12",
     "express": "^4.18.2",
-    "stremio-addon-sdk": "^1.6.0"
+    "stremio-addon-sdk": "^1.14.1"
   }
 }
